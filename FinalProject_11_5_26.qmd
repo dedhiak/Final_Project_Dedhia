@@ -1,0 +1,758 @@
+---
+title: "FinalProject_11_5_26"
+format: html
+editor: visual
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+#packages for this project
+library(readxl)
+library(dplyr)
+library(purrr)
+library(gtsummary)
+library(dendextend)
+library(readr)
+library(tidyverse)
+library(dtplyr)
+library(broom)
+library(tidymodels)
+library(randomForest)
+library(pROC)
+library(cluster)
+library(uwot)
+library(cowplot)
+library(modelsummary)
+library(vip)
+library(dotwhisker)
+```
+
+You can add options to executable code like this
+
+```{r}
+#uploading the file
+
+data_file <- "~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx"
+
+#identifying each sheet 
+sheet_names <- excel_sheets(data_file)
+
+or_note <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "OR note")
+Dem <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "Dem")
+meds <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "DC meds")
+tonsil_char <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "tonsil char")
+indications <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "indications")
+PTH <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "PTH")
+Comorbidities <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "comorbidities")
+ED_visit <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "ED_visit")
+ED_reason <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "ED visit reason")
+adenoid_char <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "adenoid char")
+
+```
+
+```{r}
+#identifying class of mrn variable in each sheet, to ensure consistenty across worksheets so this can be linked to one large worksheet
+class(or_note$mrn)
+class(Dem$mrn)
+class(meds$mrn)
+class(tonsil_char$mrn)
+class(indications$mrn)
+class(PTH$mrn)
+class(Comorbidities$mrn)
+class(ED_visit$mrn)
+class(ED_reason$mrn)
+```
+
+```{r}
+#changing mrn to character so we can use it for the join
+or_note$mrn <- as.character(or_note$mrn)
+Dem$mrn <- as.character(Dem$mrn)
+tonsil_char$mrn <- as.character(tonsil_char$mrn)
+indications$mrn <- as.character(indications$mrn)
+ED_reason$mrn <- as.character(ED_reason$mrn)
+#joining all the sheets into one large dataset using mrn as the primary key
+master <- or_note %>%
+  left_join(Dem, by = "mrn") %>%
+  left_join(meds, by = "mrn") %>%
+  left_join(tonsil_char, by = "mrn") %>%
+  left_join(indications, by = "mrn") %>%
+  left_join(PTH, by = "mrn") %>%
+  left_join(Comorbidities, by = "mrn") %>%
+  left_join(ED_visit, by = "mrn") %>%
+  left_join(ED_reason, by = "mrn")
+
+names(master)
+```
+
+```{r}
+#Renaming variables
+Master_full <- master |>
+  rename(
+    adenoid_tool = tool_for_adenoid_removal,
+    adenoid_removal_watt_1 = watt_setting_for_adenoid_removal_1,
+    adenoid_removal_watt_2 = watt_setting_for_adenoid_removal_2,
+    adenoid_cautery_tool = tool_for_adenoid_cautery,
+    adenoid_cautery_watt_1 = watt_setting_for_adenoid_cautery_1,
+    adenoid_cautery_watt_2 = watt_setting_for_adenoid_cautery_2,
+    tonsillectomy_type = type_of_tonsillectomy_performed,
+    tonsil_tool = tool_for_tonsil_removal,
+    tonsil_removal_watt_1 = watt_setting_for_tonsil_removal_1,
+    tonsil_removal_watt_2 = watt_setting_for_tonsil_removal_2,
+    tonsil_cautery_tool = tool_for_tonsil_cautery,
+    tonsil_cautery_watt_1 = watt_setting_for_tonsil_cautery_1,
+    tonsil_cautery_watt_2 = watt_setting_for_tonsil_cautery_2,
+    return_OR = procedure_preformed_post,
+    TA_ED_visit = related_to_post_ta_concerns_comps,
+    Vomit = Vomiting_no_blood,
+    Tonsillectomy_Type = type_of_tonsillectomy_performed,
+    sex = sex_pa,
+    tonsil_stone_finding = `Tonsil stones`,
+    Other_reason_ED = Other,
+    Assitant = assistant_present_at_ta
+  )
+names(Master_full)
+```
+
+```{r}
+#creating new variables
+Master_final <- Master_full |>
+  mutate(
+    Tonsillectomy_Type = case_when(
+      grepl("Extracapsular", Tonsillectomy_Type) ~ 1,
+      grepl("Intracapsular", Tonsillectomy_Type) ~ 2,
+      TRUE ~ NA_real_
+    ),
+    Tonsillectomy_Type = factor(
+      Tonsillectomy_Type,
+      levels = c(1, 2),
+      labels = c("Extracapsular", "Intracapsular")
+    )
+  ) |>
+  mutate(
+    tonsil_removal_tool = case_when(
+      tonsil_tool %in% c(
+        "Suction Bovie",
+        "Suction Cautery and Microdebrider",
+        "Bipolar Bayonet"
+      ) ~ "Other",
+      
+      tonsil_tool %in% c(
+        "Bovie",
+        "Coblator",
+        "Microdebrider"
+      ) ~ tonsil_tool,
+      
+      TRUE ~ NA_character_
+    ),
+    
+    tonsil_removal_tool = factor(
+      tonsil_removal_tool,
+      levels = c(
+        "Bovie",
+        "Coblator",
+        "Microdebrider",
+        "Other"
+      )
+    )
+  ) |>
+  mutate(
+    tonsil_cautery_tool = case_when(
+      tonsil_cautery_tool %in% c(
+        "Suction Bovie",
+        "Bovie"
+      ) ~ "Suction_Bovie",
+      
+      tonsil_cautery_tool == "Coblator" ~ "Coblator",
+      
+      tonsil_cautery_tool == "Coblator & Suction Bovie" ~
+        "Coblator & Suction Bovie",
+      
+      tonsil_cautery_tool %in% c(
+        "Blank / missing",
+        "Microdebrider",
+        "88888888",
+        "Bipolar cautery"
+      ) ~ "Other",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    tonsil_cautery_tool = factor(
+      tonsil_cautery_tool,
+      levels = c(
+        "Suction_Bovie",
+        "Coblator",
+        "Coblator & Suction Bovie",
+        "Other"
+      )
+    )
+  )|>
+  mutate(
+    ethnicity = case_when(
+      ethnicity %in% c(
+        "Choose not to disclose",
+        "Choose Not to Disclose",
+        "Refused"
+      ) ~ "Refused",
+      
+      ethnicity %in% c(
+        "Unknown",
+        "Asked But Unknown"
+      ) ~ "Missing",
+      
+      is.na(ethnicity) ~ "Missing",
+      
+      TRUE ~ ethnicity
+    ),
+    
+    ethnicity = factor(
+      ethnicity,
+      levels = c(
+        "Not Hispanic or Latino",
+        "Hispanic or Latino",
+        "Other",
+        "Refused",
+        "Missing"
+      )
+    )
+  )|>
+  mutate(
+    race = factor(
+      race,
+      levels = c(
+        "White",
+        "Black_AA",
+        "Multi_Racial",
+        "Other",
+        "Refused",
+        "Unknown"
+      )
+    )
+  ) |>
+  mutate(
+    language = factor(
+      language,
+      levels = c(
+        "English",
+        "Spanish",
+        "Other"
+      )
+    )
+  ) |>
+  mutate(
+    ahi = ifelse(ahi == 99999999, NA, ahi),
+    co2 = ifelse(co2 == 99999999, NA, co2),
+    spo2_nadir = ifelse(spo2_nadir == 99999999, NA, spo2_nadir)
+  )|>
+  mutate(across(
+    c(
+      Assitant,
+      surgeon_coded,
+      sex, 
+      asthma,
+      autism,
+      gerd,
+      obesity_hx,
+      trisomy_21,
+      developmental_delay_hx,
+      gastrostomy_tube,
+      hurler_syndrome,
+      posttransplant_lymphoproliferative_disorder,
+      overweight,
+      cardiac_repairs_condition_hx,
+      any_form_coagulopathy,
+      sickle_cell_disease_hx,
+      g6pd,
+      lung_transplant_prev,
+      bone_marrow_transplant_prev,
+      Narcotic, 
+      Celebrex,
+      Dexamethasone,
+      Tylenol,
+      Hypervascular,
+      Infected,
+      Cryptic,
+      tonsil_stone_finding,
+      Other_reason_ED,
+      OSA_combined,
+      Infection,
+      ATH_combined,
+      TA_bleed,
+      Vomit,
+      Vomiting_blood,
+      Pain,
+      Epistaxis,
+      Blood_streaked_sputum,
+      Dehydration,
+      fever,
+      ),
+    factor
+  ))|>
+  mutate(
+    NSAID = ifelse(
+      Motrin == "1" |
+        Toradol == "1",
+      1, 0
+    ))|>
+  mutate(
+    return_OR = replace_na(return_OR, "No"),
+    TA_ED_visit = replace_na(TA_ED_visit, "No")
+  ) |>
+  mutate(
+    return_OR = factor(
+      return_OR,
+      levels = c("No", "1"),
+      labels = c("No", "Yes")
+    ),
+    TA_ED_visit = factor(
+      TA_ED_visit,
+      levels = c("No", "1"),
+      labels = c("No", "Yes")
+    )
+  )|>
+  mutate(
+    Bleeding = factor(
+      replace_na(Bleeding, 0),
+      levels = c(0, 1),
+      labels = c("No", "Yes")
+    )
+  )
+```
+
+```{r}
+# creating the dataset with all the covariates and outcomes
+Master_final_analytic_data <- Master_final|>
+  select (
+    Tonsillectomy_Type,
+    Assitant,
+    surgery_age,
+    surgeon_coded,
+    tonsil_removal_tool,
+    tonsil_cautery_tool,
+    ethnicity,
+    sex,
+    race,
+    language,
+    Narcotic,
+    Celebrex,
+    Dexamethasone,
+    NSAID,
+    Tylenol,
+    Max_tonsil_size,
+    Hypervascular,
+    Infected,
+    Cryptic,
+    tonsil_stone_finding,
+    Other_reason_ED,
+    Chronic_Nasal_Congestion,
+    OSA_combined,
+    ATH_combined,
+    Infection,
+    return_OR,
+    asthma,
+    autism,
+    cardiac_repairs_condition_hx,
+    chronic_tonsillitis_hx,
+    any_form_coagulopathy,
+    cpap_bipap_dependent,
+    g6pd,
+    gerd,
+    developmental_delay_hx,
+    gastrostomy_tube,
+    hurler_syndrome,
+    posttransplant_lymphoproliferative_disorder,
+    obesity_hx,
+    overweight,
+    sickle_cell_disease_hx,
+    lung_transplant_prev,
+    kidney_transplant_prev,
+    heart_transplant_prev,
+    bone_marrow_transplant_prev,
+    trisomy_21,
+    ahi,
+    co2,
+    spo2_nadir,
+    ed_visit_days_after_surgery,
+    TA_ED_visit,
+    multiple_visits,
+    TA_bleed,
+    Epistaxis,
+    Vomit,
+    Blood_streaked_sputum,
+    Vomiting_blood,
+    Dehydration,
+    Pain,
+    fever,
+    Bleeding)
+```
+
+```{r}
+#look at count of all the potential covariates in the model
+Master_final_analytic_data|> 
+  tbl_summary(return_OR)|>
+add_p()
+```
+
+```{r}
+#adjust the variables based on the table summary to improve model stability
+Master_final_analytic_data_1 <- Master_final_analytic_data  |>
+  select(
+    -Chronic_Nasal_Congestion,
+    -tonsil_stone_finding,
+    -Infected
+  )|>
+mutate(
+    complex_medical_comorbidity =
+      ifelse(
+        trisomy_21 == 1 |
+          sickle_cell_disease_hx == 1 |
+          gastrostomy_tube == 1 |
+          any_form_coagulopathy == 1 |
+          cardiac_repairs_condition_hx != 0 |
+          g6pd == 1 |
+          cpap_bipap_dependent == 1 |
+          hurler_syndrome == 1 |
+          posttransplant_lymphoproliferative_disorder == 1 |
+          lung_transplant_prev == 1 |
+          kidney_transplant_prev == 1 |
+          heart_transplant_prev == 1 |
+          bone_marrow_transplant_prev == 1,
+        1, 0
+      )
+  )|>
+mutate (
+  obese_overweight =
+    ifelse(
+      obesity_hx == 1|
+      overweight == 1,
+      1,0
+    )
+)|>
+  mutate(
+    tonsil_cautery_tool = case_when(
+      tonsil_cautery_tool == "Coblator" ~ "Coblator",
+      TRUE ~ "Suction_Bovie"
+    ),
+    
+    tonsil_cautery_tool = factor(
+      tonsil_cautery_tool,
+      levels = c(
+        "Suction_Bovie",
+        "Coblator"
+      )
+    )
+  )|>
+  mutate(
+    tonsil_removal_tool = case_when(
+      tonsil_removal_tool == "Bovie" ~ "Bovie",
+      tonsil_removal_tool == "Coblator" ~ "Coblator",
+      tonsil_removal_tool == "Microdebrider" ~ "Microdebrider",
+      TRUE ~ NA_character_
+    ),
+    
+    tonsil_removal_tool = factor(
+      tonsil_removal_tool,
+      levels = c(
+        "Bovie",
+        "Coblator",
+        "Microdebrider"
+      )
+    )
+  )|>
+  mutate(
+    ethnicity = case_when(
+      ethnicity == "Not Hispanic or Latino" ~
+        "Not Hispanic",
+      
+      ethnicity == "Hispanic or Latino" ~
+        "Hispanic",
+      
+      ethnicity %in% c(
+        "Other",
+        "Refused",
+        "Missing"
+      ) ~ "Other_Missing_Refused",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    ethnicity = factor(
+      ethnicity,
+      levels = c(
+        "Not Hispanic",
+        "Hispanic",
+        "Other_Missing_Refused"
+      )
+    )
+  )|>
+  mutate(
+    race = case_when(
+      race == "White" ~ "White",
+      
+      race == "Black_AA" ~ "Black_AA",
+      
+      race %in% c(
+        "Other",
+        "Multi_Racial"
+      ) ~ "Other_Multi_Racial",
+      
+      race %in% c(
+        "Refused",
+        "Unknown"
+      ) ~ "Missing_Refused",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    race = factor(
+      race,
+      levels = c(
+        "White",
+        "Black_AA",
+        "Other_Multi_Racial",
+        "Missing_Refused"
+      )
+    )
+  )
+  
+
+```
+
+```{r}
+Master_final_analytic_data_1 |>
+  tbl_summary(return_OR)
+```
+
+```{r}
+model_OR <- Master_final_analytic_data_1 |>
+  select (
+    Tonsillectomy_Type,
+    Assitant,
+    surgery_age,
+    ethnicity,
+    sex,
+    race,
+    Celebrex,
+    Max_tonsil_size,
+    Hypervascular,
+    Cryptic,
+    OSA_combined,
+    Infection,
+    asthma,
+    autism,
+    complex_medical_comorbidity,
+    obese_overweight,
+    gerd,
+    developmental_delay_hx,
+   return_OR,)
+```
+
+```{r}
+
+```
+
+```{r}
+set.seed(5030)
+OR_split <- initial_split(model_OR, prop = 0.75, strata = return_OR)
+OR_train <- training(OR_split)
+OR_test <- testing(OR_split)
+
+OR_folds <- vfold_cv(OR_train, v = 5, strata = return_OR)
+
+# receipe
+OR_recipe <- recipe(
+  return_OR ~ .,
+  data = model_OR
+) |>
+  step_unknown(
+    all_nominal_predictors(),
+    new_level = "Missing"
+  ) |>
+  step_impute_median(
+    all_numeric_predictors()
+  ) |>
+  step_novel(
+    all_nominal_predictors(),
+    new_level = "New"
+  ) |>
+  step_dummy(
+    all_nominal_predictors(),
+    one_hot = FALSE
+  ) |>
+  step_zv(
+    all_predictors()
+  ) |>
+  step_normalize(
+    all_numeric_predictors()
+  )
+
+```
+
+```{r}
+#LASSO model
+lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) |>
+  set_engine("glmnet")
+
+lasso_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(lasso_spec)
+
+lasso_grid <- tibble(penalty = 10^seq(-4, -0.5, length.out = 20))
+
+lasso_tune <- lasso_wf |>
+  tune_grid(OR_folds, grid = lasso_grid, metrics = metric_set(roc_auc))
+
+autoplot(lasso_tune)
+
+show_best(lasso_tune, metric = "roc_auc")
+select_best(lasso_tune, metric = "roc_auc")
+
+lasso_1se <- select_by_one_std_err(lasso_tune, desc(penalty), metric = "roc_auc")
+lasso_1se
+
+lasso_final_wf <- finalize_workflow(lasso_wf, lasso_1se)
+
+lasso_cv <- lasso_final_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(lasso_cv)
+
+coef(
+  extract_fit_parsnip(
+    fit(finalize_workflow(lasso_wf, lasso_1se),
+        model_OR)
+  )$fit,
+  s = lasso_1se$penalty
+)
+
+```
+
+```{r}
+#Logistic
+lr_spec <- logistic_reg() |>
+  set_engine("glm")
+
+lr_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(lr_spec)
+
+lr_cv <- lr_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(lr_cv)
+```
+
+```{r}
+#random forrest
+rf_spec <- rand_forest(trees = 500) |>
+  set_engine("randomForest") |>
+  set_mode("classification")
+
+rf_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(rf_spec)
+
+set.seed(5030)
+rf_cv <- rf_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(rf_cv)
+```
+
+```{r}
+#grandient boosted trees
+
+xgb_spec <- boost_tree(trees = 200, tree_depth = 3, learn_rate = 0.05) |>
+  set_engine("xgboost") |>
+  set_mode("classification")
+
+xgb_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(xgb_spec)
+
+set.seed(5030)
+xgb_cv <- xgb_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(xgb_cv)
+```
+
+```{r}
+show_best(lr_cv, metric = "roc_auc")
+show_best(lasso_cv, metric = "roc_auc")
+```
+
+```{r}
+#comparing models
+cv_results <- list(logistic = lr_cv, lasso = lasso_cv,
+                   random_forest = rf_cv, boosting = xgb_cv)
+
+cv_metrics <- map(cv_results, collect_metrics) |>
+  bind_rows(.id = "model")
+
+cv_metrics |>
+  select(model, .metric, mean, std_err) |>
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err))
+
+cv_preds <- map(cv_results, collect_predictions) |>
+  bind_rows(.id = "model")
+
+cv_preds |>
+  group_by(model) |>
+  roc_curve(return_OR, .pred_Yes, event_level = "second") |>
+  autoplot()
+```
+
+```{r}
+
+#final eval on test set
+
+final_fit <- last_fit(lasso_final_wf, OR_split)
+
+collect_metrics(final_fit)
+
+collect_predictions(final_fit) |>
+  roc_curve(return_OR, .pred_Yes, event_level = "second") |>
+  autoplot()
+```
+
+```{r}
+final_model <- extract_fit_parsnip(final_fit)
+
+tidy(final_model) |>
+  arrange(desc(abs(estimate)))
+
+vip(final_model, lambda = lasso_1se$penalty)
+```
+
+--OR expon
+
+```{r}
+
+```
+
+```{r}
+final_fit <- last_fit(lr_wf, OR_split)
+
+collect_metrics(final_fit)
+
+collect_predictions(final_fit) |>
+  roc_curve(return_OR, .pred_Yes, event_level = "second") |>
+  autoplot()
+
+final_model <- extract_fit_parsnip(final_fit)
+
+tidy(
+  final_model,
+  exponentiate = TRUE,
+  conf.int = TRUE
+) |>
+  arrange(p.value)
+```

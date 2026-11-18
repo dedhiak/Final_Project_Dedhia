@@ -1,0 +1,40 @@
+---
+title: "Final_Project_Dedhia"
+format: html
+editor: visual
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+Overview: The goals of this project will be to create a predictive model assessing what factors are associated with increased risk of bleeding after tonsillectomy. The primary outcome is return to the OR for control of post-tonsillectomy hemorrhage.
+
+Introduction:
+
+Tonsillectomy represents the second most common pediatric ambulatory surgery in the United States, with an estimated 500,000 cases performed annually.^1,2^ Primary indications are obstructive sleep apnea/sleep-disordered breathing and recurrent tonsillitis among early school-aged children. Postoperative complications include uncontrolled postoperative pain, dehydration, infection, delayed return to normal activity, and hemorrhage. These morbidities are often interconnected, as uncontrolled pain often limits fluid intake and increases the risk of post-tonsillectomy hemorrhage (PTH), which is widely considered the most serious and potentially life-threatening complication. With bleed rates ranging between 1 to 10% of all cases, concern for hemorrhage drives a substantial portion of healthcare utilization after tonsillectomy, including patient phone calls, emergency department visits, unplanned hospital readmissions, or returns to the operating room.^3-5^ Creating a predictive algorithm to identify which child is most at risk for bleeding allow better understanding of who may be at higher risk for PTH.
+
+At our institution, over 3,000 tonsillectomies are performed annually, a patient volume that makes manual data abstraction impractical. The current study utilizes an innovative platform, the Clinical Outcomes Data Archive (CODA), along with a Large Language Model (LLM), to efficiently abstract post-tonsillectomy outcome data from unstructured EHR documentation in real time. Within CODA, electronic case report forms, referred to as “cards”, were created to manage data abstraction from EHR documentation. Six cards were developed: patient identification and demographics, comorbidities, operative details, discharge medications, postoperative emergency department or urgent care visits, and returns to the operating room. 
+
+A card instance was created for each distinct corresponding clinical encounter matched to each card type e.g. operative details linked to the date of operation, postoperative emergency department visit for each (if any) arrival to the emergency department. Each card instance was linked to a patient identifier, the EHR documentation from the event, and a set of variables to be collected. A data dictionary was created to establish operational definitions for each variable, the set of allowed responses for textual response types, and data types for numeric and date variables, the data source within the EHR, and rules regarding abstraction.
+
+Card instances transitioned across three queues: acquisition, abstraction, and validation. The acquisition queue involved automated extraction of clinical documentation for the corresponding event from the EHR. The CODA application queried the EHR both retrospectively (beginning January 1, 2024) and prospectively to capture documentation in real time. The prospective query was performed daily. Documentation and abstracted data containing protected health information (PHI) were stored in a vendor-managed, firewalled, access-controlled cloud environment under a Business Associate Agreement (BAA) between the vendor and our institution, with safeguards consistent with the HIPAA Security Rule.
+
+After automated note acquisition, the card advances to the abstraction queue where data collection is performed. Data were manually abstracted from the note into variables by trained reviewers. Questions were escalated to the project clinical leaders and updates to the data dictionary were made accordingly. The card was subsequently moved to the validation queue, where it was independently validated by a second reviewer to ensure accuracy. This served as a “gold standard” dataset.  
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
