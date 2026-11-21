@@ -1,0 +1,925 @@
+---
+title: "FinalProject_11_5_26"
+format: html
+editor: visual
+---
+
+## Analyzing Factors Increasing the Risk of Post-tonsillectomy Hemorrhage Using a Predictive Model
+
+## **1. Overview:**
+
+The goal of this project is to create a predictive model assessing what factors are associated with increased risk of bleeding after tonsillectomy. The primary outcome is return to the operating room (OR) for control of post-tonsillectomy hemorrhage.
+
+## **2. Introduction:**
+
+Tonsillectomy represents the second most common pediatric ambulatory surgery in the United States, with an estimated 500,000 cases performed annually.^1,2^ Primary indications are obstructive sleep apnea/sleep-disordered breathing and recurrent tonsillitis among early school-aged children. Postoperative complications include uncontrolled postoperative pain, dehydration, infection, delayed return to normal activity, and hemorrhage. These morbidities are often interconnected, as uncontrolled pain often limits fluid intake and increases the risk of post-tonsillectomy hemorrhage (PTH), which is widely considered the most serious and potentially life-threatening complication. With bleed rates ranging between 1 to 10% of all cases, concern for hemorrhage drives a substantial portion of healthcare utilization after tonsillectomy, including patient phone calls, emergency department visits, unplanned hospital readmission, or returns to the operating room.^3-5^ Creating a predictive algorithm to identify which child is most at risk for bleeding allow better understanding of who may be at higher risk for PTH.
+
+At our institution, over 3,000 tonsillectomies are performed annually, a patient volume that makes manual data abstraction impractical. The current study utilizes an innovative platform, the Clinical Outcomes Data Archive (CODA), along with a Large Language Model (LLM), to efficiently abstract post-tonsillectomy outcome data from unstructured EHR documentation in real time. Within CODA, electronic case report forms, referred to as “cards”, were created to manage data abstraction from EHR documentation. Six cards were developed: patient identification and demographics, comorbidities, operative details, discharge medications, postoperative emergency department or urgent care visits, and returns to the operating room.
+
+A card instance was created for each distinct corresponding clinical encounter matched to each card type e.g. operative details linked to the date of operation, postoperative emergency department visit for each (if any) arrival to the emergency department.Each card instance was linked to a patient identifier, the EHR documentation from the event, and a set of variables to be collected. A data dictionary was created to establish operational definitions for each variable, the set of allowed responses for textual response types, and data types for numeric and date variables, the data source within the EHR, and rules regarding abstraction.
+
+Card instances transitioned across three queues: acquisition, abstraction, and validation. The acquisition queue involved automated extraction of clinical documentation for the corresponding event from the EHR. The CODA application queried the EHR both retrospectively (beginning January 1, 2024) and prospectively to capture documentation in real time. The prospective query was performed daily. Documentation and abstracted data containing protected health information (PHI) were stored in a vendor-managed, firewalled, access-controlled cloud environment under a Business Associate Agreement (BAA) between the vendor and our institution, with safeguards consistent with the HIPAA Security Rule.
+
+After automated note acquisition, the card advances to the abstraction queue where data collection is performed. Data were manually abstracted from the note into variables by trained reviewers. Questions were escalated to the project clinical leaders and updates to the data dictionary were made accordingly. The card was subsequently moved to the validation queue, where it was independently validated by a second reviewer to ensure accuracy.This served as a “gold standard” dataset.
+
+## **3. Methods**
+
+**3.1 loading packages for the project**
+
+```{r}
+#packages for this project
+library(readxl)
+library(dplyr)
+library(purrr)
+library(gtsummary)
+library(dendextend)
+library(readr)
+library(tidyverse)
+library(dtplyr)
+library(broom)
+library(tidymodels)
+library(randomForest)
+library(pROC)
+library(cluster)
+library(uwot)
+library(cowplot)
+library(modelsummary)
+library(vip)
+library(dotwhisker)
+library(mice)
+library(yardstick)
+```
+
+**3.1 Uploading files and joining**
+
+```{r}
+#uploading the file
+
+data_file <- "~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx"
+
+#identifying each sheet 
+sheet_names <- excel_sheets(data_file)
+
+or_note <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "OR note")
+Dem <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "Dem")
+meds <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "DC meds")
+tonsil_char <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "tonsil char")
+indications <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "indications")
+PTH <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "PTH")
+Comorbidities <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "comorbidities")
+ED_visit <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "ED_visit")
+ED_reason <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "ED visit reason")
+adenoid_char <- read_excel("~/Desktop/BMIN5030/Final_Project-Data_11_5_26.xlsx", sheet = "adenoid char")
+
+```
+
+```{r}
+#identifying class of mrn variable in each sheet, to ensure consistency across worksheets so this can be linked to one large worksheet
+class(or_note$mrn)
+class(Dem$mrn)
+class(meds$mrn)
+class(tonsil_char$mrn)
+class(indications$mrn)
+class(PTH$mrn)
+class(Comorbidities$mrn)
+class(ED_visit$mrn)
+class(ED_reason$mrn)
+```
+
+```{r}
+#changing mrn to character so we can use it for the join
+or_note$mrn <- as.character(or_note$mrn)
+Dem$mrn <- as.character(Dem$mrn)
+tonsil_char$mrn <- as.character(tonsil_char$mrn)
+indications$mrn <- as.character(indications$mrn)
+ED_reason$mrn <- as.character(ED_reason$mrn)
+#joining all the sheets into one large dataset using mrn as the primary key
+master <- or_note %>%
+  left_join(Dem, by = "mrn") %>%
+  left_join(meds, by = "mrn") %>%
+  left_join(tonsil_char, by = "mrn") %>%
+  left_join(indications, by = "mrn") %>%
+  left_join(PTH, by = "mrn") %>%
+  left_join(Comorbidities, by = "mrn") %>%
+  left_join(ED_visit, by = "mrn") %>%
+  left_join(ED_reason, by = "mrn")
+
+names(master)
+```
+
+**3.2 Data cleaning and renaming and creating variables**
+
+```{r}
+#Renaming variables
+Master_full <- master |>
+  rename(
+    adenoid_tool = tool_for_adenoid_removal,
+    adenoid_removal_watt_1 = watt_setting_for_adenoid_removal_1,
+    adenoid_removal_watt_2 = watt_setting_for_adenoid_removal_2,
+    adenoid_cautery_tool = tool_for_adenoid_cautery,
+    adenoid_cautery_watt_1 = watt_setting_for_adenoid_cautery_1,
+    adenoid_cautery_watt_2 = watt_setting_for_adenoid_cautery_2,
+    tonsillectomy_type = type_of_tonsillectomy_performed,
+    tonsil_tool = tool_for_tonsil_removal,
+    tonsil_removal_watt_1 = watt_setting_for_tonsil_removal_1,
+    tonsil_removal_watt_2 = watt_setting_for_tonsil_removal_2,
+    tonsil_cautery_tool = tool_for_tonsil_cautery,
+    tonsil_cautery_watt_1 = watt_setting_for_tonsil_cautery_1,
+    tonsil_cautery_watt_2 = watt_setting_for_tonsil_cautery_2,
+    return_OR = procedure_preformed_post,
+    TA_ED_visit = related_to_post_ta_concerns_comps,
+    Vomit = Vomiting_no_blood,
+    Tonsillectomy_Type = type_of_tonsillectomy_performed,
+    sex = sex_pa,
+    tonsil_stone_finding = `Tonsil stones`,
+    Other_reason_ED = Other,
+    Assitant = assistant_present_at_ta
+  )
+names(Master_full)
+```
+
+```{r}
+#creating new variables to use in the final data model for analysis
+Master_final <- Master_full |>
+  mutate(
+    Tonsillectomy_Type = case_when(
+      grepl("Extracapsular", Tonsillectomy_Type) ~ 1,
+      grepl("Intracapsular", Tonsillectomy_Type) ~ 2,
+      TRUE ~ NA_real_
+    ),
+    Tonsillectomy_Type = factor(
+      Tonsillectomy_Type,
+      levels = c(1, 2),
+      labels = c("Extracapsular", "Intracapsular")
+    )
+  ) |>
+  mutate(
+    tonsil_removal_tool = case_when(
+      tonsil_tool %in% c(
+        "Suction Bovie",
+        "Suction Cautery and Microdebrider",
+        "Bipolar Bayonet"
+      ) ~ "Other",
+      
+      tonsil_tool %in% c(
+        "Bovie",
+        "Coblator",
+        "Microdebrider"
+      ) ~ tonsil_tool,
+      
+      TRUE ~ NA_character_
+    ),
+    
+    tonsil_removal_tool = factor(
+      tonsil_removal_tool,
+      levels = c(
+        "Bovie",
+        "Coblator",
+        "Microdebrider",
+        "Other"
+      )
+    )
+  ) |>
+  mutate(
+    tonsil_cautery_tool = case_when(
+      tonsil_cautery_tool %in% c(
+        "Suction Bovie",
+        "Bovie"
+      ) ~ "Suction_Bovie",
+      
+      tonsil_cautery_tool == "Coblator" ~ "Coblator",
+      
+      tonsil_cautery_tool == "Coblator & Suction Bovie" ~
+        "Coblator & Suction Bovie",
+      
+      tonsil_cautery_tool %in% c(
+        "Blank / missing",
+        "Microdebrider",
+        "88888888",
+        "Bipolar cautery"
+      ) ~ "Other",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    tonsil_cautery_tool = factor(
+      tonsil_cautery_tool,
+      levels = c(
+        "Suction_Bovie",
+        "Coblator",
+        "Coblator & Suction Bovie",
+        "Other"
+      )
+    )
+  )|>
+  mutate(
+    ethnicity = case_when(
+      ethnicity %in% c(
+        "Choose not to disclose",
+        "Choose Not to Disclose",
+        "Refused"
+      ) ~ "Refused",
+      
+      ethnicity %in% c(
+        "Unknown",
+        "Asked But Unknown"
+      ) ~ "Missing",
+      
+      is.na(ethnicity) ~ "Missing",
+      
+      TRUE ~ ethnicity
+    ),
+    
+    ethnicity = factor(
+      ethnicity,
+      levels = c(
+        "Not Hispanic or Latino",
+        "Hispanic or Latino",
+        "Other",
+        "Refused",
+        "Missing"
+      )
+    )
+  )|>
+  mutate(
+    race = factor(
+      race,
+      levels = c(
+        "White",
+        "Black_AA",
+        "Multi_Racial",
+        "Other",
+        "Refused",
+        "Unknown"
+      )
+    )
+  ) |>
+  mutate(
+    language = factor(
+      language,
+      levels = c(
+        "English",
+        "Spanish",
+        "Other"
+      )
+    )
+  ) |>
+  mutate(
+    ahi = ifelse(ahi == 99999999, NA, ahi),
+    co2 = ifelse(co2 == 99999999, NA, co2),
+    spo2_nadir = ifelse(spo2_nadir == 99999999, NA, spo2_nadir)
+  )|>
+  mutate(across(
+    c(
+      Assitant,
+      surgeon_coded,
+      sex, 
+      asthma,
+      autism,
+      gerd,
+      obesity_hx,
+      trisomy_21,
+      developmental_delay_hx,
+      gastrostomy_tube,
+      hurler_syndrome,
+      posttransplant_lymphoproliferative_disorder,
+      overweight,
+      cardiac_repairs_condition_hx,
+      any_form_coagulopathy,
+      sickle_cell_disease_hx,
+      g6pd,
+      lung_transplant_prev,
+      bone_marrow_transplant_prev,
+      Narcotic, 
+      Celebrex,
+      Dexamethasone,
+      Tylenol,
+      Hypervascular,
+      Infected,
+      Cryptic,
+      tonsil_stone_finding,
+      Other_reason_ED,
+      OSA_combined,
+      Infection,
+      ATH_combined,
+      TA_bleed,
+      Vomit,
+      Vomiting_blood,
+      Pain,
+      Epistaxis,
+      Blood_streaked_sputum,
+      Dehydration,
+      fever,
+      ),
+    factor
+  ))|>
+  mutate(
+    NSAID = ifelse(
+      Motrin == "1" |
+        Toradol == "1",
+      1, 0
+    ))|>
+  mutate(
+    return_OR = replace_na(return_OR, "No"),
+    TA_ED_visit = replace_na(TA_ED_visit, "No")
+  ) |>
+  mutate(
+    return_OR = factor(
+      return_OR,
+      levels = c("No", "1"),
+      labels = c("No", "Yes")
+    ),
+    TA_ED_visit = factor(
+      TA_ED_visit,
+      levels = c("No", "1"),
+      labels = c("No", "Yes")
+    )
+  )|>
+  mutate(
+    Bleeding = factor(
+      replace_na(Bleeding, 0),
+      levels = c(0, 1),
+      labels = c("No", "Yes")
+    )
+  )
+```
+
+```{r}
+# creating the dataset with all the covariates and outcomes
+Master_final_analytic_data <- Master_final|>
+  select (
+    Tonsillectomy_Type,
+    Assitant,
+    surgery_age,
+    surgeon_coded,
+    tonsil_removal_tool,
+    tonsil_cautery_tool,
+    ethnicity,
+    sex,
+    race,
+    language,
+    Narcotic,
+    Celebrex,
+    Dexamethasone,
+    NSAID,
+    Tylenol,
+    Max_tonsil_size,
+    Hypervascular,
+    Infected,
+    Cryptic,
+    tonsil_stone_finding,
+    Other_reason_ED,
+    Chronic_Nasal_Congestion,
+    OSA_combined,
+    ATH_combined,
+    Infection,
+    return_OR,
+    asthma,
+    autism,
+    cardiac_repairs_condition_hx,
+    chronic_tonsillitis_hx,
+    any_form_coagulopathy,
+    cpap_bipap_dependent,
+    g6pd,
+    gerd,
+    developmental_delay_hx,
+    gastrostomy_tube,
+    hurler_syndrome,
+    posttransplant_lymphoproliferative_disorder,
+    obesity_hx,
+    overweight,
+    sickle_cell_disease_hx,
+    lung_transplant_prev,
+    kidney_transplant_prev,
+    heart_transplant_prev,
+    bone_marrow_transplant_prev,
+    trisomy_21,
+    ahi,
+    co2,
+    spo2_nadir,
+    ed_visit_days_after_surgery,
+    TA_ED_visit,
+    multiple_visits,
+    TA_bleed,
+    Epistaxis,
+    Vomit,
+    Blood_streaked_sputum,
+    Vomiting_blood,
+    Dehydration,
+    Pain,
+    fever,
+    Bleeding)
+```
+
+```{r}
+#look at count of all the potential covariates in the model
+Master_final_analytic_data|> 
+  tbl_summary(return_OR)|>
+add_p()
+```
+
+```{r}
+#adjust the variables based on the table summary to improve model stability, remove rare covarites which are similar to other potential predictors in the model, combine rare covariates (ex: a complex medical comorbidity variable was created to indicate if any of the rare comorbidities were present)
+Master_final_analytic_data_1 <- Master_final_analytic_data  |>
+  select(
+    -Chronic_Nasal_Congestion,
+    -tonsil_stone_finding,
+    -Infected
+  )|>
+mutate(
+    complex_medical_comorbidity =
+      ifelse(
+        trisomy_21 == 1 |
+          sickle_cell_disease_hx == 1 |
+          gastrostomy_tube == 1 |
+          any_form_coagulopathy == 1 |
+          cardiac_repairs_condition_hx != 0 |
+          g6pd == 1 |
+          cpap_bipap_dependent == 1 |
+          hurler_syndrome == 1 |
+          posttransplant_lymphoproliferative_disorder == 1 |
+          lung_transplant_prev == 1 |
+          kidney_transplant_prev == 1 |
+          heart_transplant_prev == 1 |
+          bone_marrow_transplant_prev == 1,
+        1, 0
+      )
+  )|>
+mutate (
+  obese_overweight =
+    ifelse(
+      obesity_hx == 1|
+      overweight == 1,
+      1,0
+    )
+)|>
+  mutate(
+    tonsil_cautery_tool = case_when(
+      tonsil_cautery_tool == "Coblator" ~ "Coblator",
+      TRUE ~ "Suction_Bovie"
+    ),
+    
+    tonsil_cautery_tool = factor(
+      tonsil_cautery_tool,
+      levels = c(
+        "Suction_Bovie",
+        "Coblator"
+      )
+    )
+  )|>
+  mutate(
+    tonsil_removal_tool = case_when(
+      tonsil_removal_tool == "Bovie" ~ "Bovie",
+      tonsil_removal_tool == "Coblator" ~ "Coblator",
+      tonsil_removal_tool == "Microdebrider" ~ "Microdebrider",
+      TRUE ~ NA_character_
+    ),
+    
+    tonsil_removal_tool = factor(
+      tonsil_removal_tool,
+      levels = c(
+        "Bovie",
+        "Coblator",
+        "Microdebrider"
+      )
+    )
+  )|>
+  mutate(
+    ethnicity = case_when(
+      ethnicity == "Not Hispanic or Latino" ~
+        "Not Hispanic",
+      
+      ethnicity == "Hispanic or Latino" ~
+        "Hispanic",
+      
+      ethnicity %in% c(
+        "Other",
+        "Refused",
+        "Missing"
+      ) ~ "Other_Missing_Refused",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    ethnicity = factor(
+      ethnicity,
+      levels = c(
+        "Not Hispanic",
+        "Hispanic",
+        "Other_Missing_Refused"
+      )
+    )
+  )|>
+  mutate(
+    race = case_when(
+      race == "White" ~ "White",
+      
+      race == "Black_AA" ~ "Black_AA",
+      
+      race %in% c(
+        "Other",
+        "Multi_Racial"
+      ) ~ "Other_Multi_Racial",
+      
+      race %in% c(
+        "Refused",
+        "Unknown"
+      ) ~ "Missing_Refused",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    race = factor(
+      race,
+      levels = c(
+        "White",
+        "Black_AA",
+        "Other_Multi_Racial",
+        "Missing_Refused"
+      )
+    )
+  )
+  
+
+```
+
+```{r}
+Master_final_analytic_data_1 |>
+  tbl_summary(return_OR)
+```
+
+**3.2 Model creation**
+
+Creating the model for analyzing covariates that predict return to OR, covarites that may have colinnearity and other outcome measures were removed for the purpose of this model. This model the main outcome is return to OR. The other variables are potential predictors of this outcome--we have included tonsillectomy type, assistent surgeon(see if there is an impact of a resident performing the procedure), sociodemographic data, Medication(celebrex--is a new pain medication we use at CHOP), surgical findings (tonsil size, cryptic, hypervascular), surgery indication (Infection, OSA), medical comorbidities (asthma, autism, obese_overweight,GERD, developmental delay and a combination of more rare comorbidities). We did not include in this model other outcome measures, medications, tonsillectomy removal and cautery tools or surgeon
+
+```{r}
+# Model to predict return
+model_OR <- Master_final_analytic_data_1 |>
+  select (
+    Tonsillectomy_Type,
+    Assitant,
+    surgery_age,
+    ethnicity,
+    sex,
+    race,
+    Celebrex,
+   Max_tonsil_size,
+    Hypervascular,
+    Cryptic,
+    OSA_combined,
+    Infection,
+    asthma,
+    autism,
+    complex_medical_comorbidity,
+    obese_overweight,
+    gerd,
+    developmental_delay_hx,
+   return_OR,)
+```
+
+3.1 Splitting the Model and Creating the Recipe
+
+We will split the cohort into a training and testing set. We will create 5 cross validation folds from the training set only to train the ML models.
+
+The recipe describes the steps to prepare our data prior to fitting the models. First we define our outcome measure (retrun_OR) and our data contining the predictor variables (model_OR). Our recipe does the following: 1. creates a new level labeled missing to capture missing data for all predictors (ex: intead of NA for missing Celebrex data, it will be labeled as Celebrex_Missing), 2. if numeric values are missing then they are replaced with the median value of the corresponding variable, 3. turns categorical variables into 0/1 dummy variables, with one category serving as the reference group, 4. removes variables with no varience, and 5. standardizes numeric variables to mean 0 and standard deviation 1 (so penalty treats all variables equally). These steps are part of the workflow and will be relearned inside each cross validation fold to avoid leaking information from held out data.
+
+```{r}
+
+#Splitting
+set.seed(5030)
+OR_split <- initial_split(model_OR, prop = 0.75, strata = return_OR)
+OR_train <- training(OR_split)
+OR_test <- testing(OR_split)
+
+OR_folds <- vfold_cv(OR_train, v = 5, strata = return_OR)
+
+#Recipe 
+OR_recipe <- recipe(
+  return_OR ~ .,
+  data = model_OR
+) |>
+  step_unknown(
+    all_nominal_predictors(),
+    new_level = "Missing"
+  ) |>
+  step_impute_median(
+    all_numeric_predictors()
+  ) |>
+  step_dummy(
+    all_nominal_predictors(),
+    one_hot = FALSE
+  ) |>
+  step_zv(
+    all_predictors()
+  ) |>
+  step_normalize(
+    all_numeric_predictors()
+  )
+```
+
+## 4. Results
+
+**4.1 Baseline LASSO model**
+
+LASSO model adds a penalty to the logistic regression and shrinks coefficients toward zero, the large the penalty the closer the coefficient is to 0. 20 penalty values were evaluated during tuning for the LASSO model and tested in the 5-fold cross validation. Performance at each penalty was assessed with ROC and AUC and the optimal penalty was chosen and applied across all coefficients, thus shrinking less important predictors closer to 0 and retaining more informative predictors.
+
+```{r}
+
+lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) |>
+  set_engine("glmnet")
+
+lasso_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(lasso_spec)
+
+lasso_grid <- tibble(penalty = 10^seq(-4, -0.5, length.out = 20))
+
+lasso_tune <- lasso_wf |>
+  tune_grid(OR_folds, grid = lasso_grid, metrics = metric_set(roc_auc))
+
+autoplot(lasso_tune)
+show_best(lasso_tune, metric = "roc_auc")
+select_best(lasso_tune, metric = "roc_auc")
+
+lasso_1se <- select_by_one_std_err(lasso_tune, desc(penalty), metric = "roc_auc")
+lasso_1se
+
+lasso_final_wf <- finalize_workflow(lasso_wf, lasso_1se)
+
+lasso_cv <- lasso_final_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(lasso_cv)
+
+coef(
+  extract_fit_parsnip(
+    fit(finalize_workflow(lasso_wf, lasso_1se),
+        model_OR)
+  )$fit,
+  s = lasso_1se$penalty
+)
+
+```
+
+The 5-fold cross validation shows that across the 5 best penalties the LASSO model achieved an AUC of between 0.82 and 0.83, with increasing penalty the AUC minimally decreased, suggesting that the model discrimination was stable across the range of penalty values. Predictive performance appeared minimally impacted by additional shrinkage. However if the penalties start to drop midway between .001 and .01 and significantly worsen at and after .01, suggesting that these larger penalties removed important predictive information and worsened model discrimination.The best selected penalty was 0.0001, however we applied the penalty within one standard deviation of the best AUC(.00127) as it has a larger penalty with little impact on the AUC and allows for a more parsimonious model.
+
+The model achieves 98% accuracy with a low Brier class score of 0.01, however these results should be interpreted with caution as the outcome is quite rare. The AUC is 0.82 which indicates good model discrimination.
+
+Using the one-standard penalty error LASSO retained the following predictors for the model (after the penalty was applied these were all the predictors that did not shrink to 0): age at surgery, maximum tonsil size, complex medical comorbidity, tonsillectomy type, sex missing category, black/AA race, other or multiracial race, celebrex, celebrex missing, hypervascular finding intra-operatively, asthma, asthma missing, gerd, gerd missing, developmental delay, and developmental delay missing. Several other variables were shrunk to 0 and not included in the model, suggesting those variables contributed very little to the predictive model.
+
+**4.2 Baseline Logistic Model**
+
+Logistic regression model specified with glm engine was combined with the recipe for the logistic regression workflow. 5-fold cross validation was performed.
+
+```{r}
+
+
+lr_spec <- logistic_reg() |>
+  set_engine("glm")
+
+lr_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(lr_spec)
+
+lr_cv <- lr_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(lr_cv)
+```
+
+During cross-validation, the logistic regression model produced warnings related to model fit 0, 1 computations, which may be due to low outcome event rate with some of the folds. Logistic also showed high accuracy of 99% and low Brier_class of .01, however this should again be interpreted with caution due to low outcome rates. The AUC was 0.83 which indicates good discrimination.
+
+**4.3 Baseline Random Forrest Model**
+
+Random forest model classification was created using 500 decision trees through the random forest engine. The model was built on a bootstrap sample of the data using a random subset of the predictors at each split. A 5-fold cross validation was performed to evaluate model performance.
+
+```{r}
+
+rf_spec <- rand_forest(trees = 500) |>
+  set_engine("randomForest") |>
+  set_mode("classification")
+
+rf_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(rf_spec)
+
+set.seed(5030)
+rf_cv <- rf_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(rf_cv)
+```
+
+Similarly the random forest cross validation showed high accuracy (99%) and low brier class (0.01), though this should be interpreted with caution due to the low outcome rate within the cohort. The AUC was lower for the random forest compared to prior models 0.74, indicating fair model discrimination.
+
+**4.4 Baseline Gradient Boosted Trees**
+
+Gradient boosted tree classification model was created with 200 decision trees, with a maximum depth of 3 and learn rate of 0.05 using the xgboost engine. Unlike random forest, gradient boosting builds trees one at a time and corrects the mistakes of the trees before it. A 5-fold cross validation was performed to evaluate model performance.
+
+```{r}
+
+
+xgb_spec <- boost_tree(trees = 200, tree_depth = 3, learn_rate = 0.05) |>
+  set_engine("xgboost") |>
+  set_mode("classification")
+
+xgb_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(xgb_spec)
+
+set.seed(5030)
+xgb_cv <- xgb_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(xgb_cv)
+```
+
+Similarly the gradient boosted trees cross validation showed high accuracy (99%) and low brier class (0.01), though this should be interpreted with caution due to the low outcome rate within the cohort. The AUC was similar to the LASSO and logistic models (0.83), indicating good model discrimination.
+
+**4.5 Model comparison**
+
+Comparing models, we will plot the ROC_AUC curves of all the models and create a table with the metrics from each model (Accuracy, AUC and Brier)
+
+```{r}
+
+cv_results <- list(logistic = lr_cv, lasso = lasso_cv,
+                   random_forest = rf_cv, boosting = xgb_cv)
+
+cv_metrics <- map(cv_results, collect_metrics) |>
+  bind_rows(.id = "model")
+
+cv_metrics |>
+  select(model, .metric, mean, std_err) |>
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err))
+
+cv_preds <- map(cv_results, collect_predictions) |>
+  bind_rows(.id = "model")
+
+cv_preds |>
+  group_by(model) |>
+  roc_curve(return_OR, .pred_Yes, event_level = "second") |>
+  autoplot()
+```
+
+When comparing all the models they have similar mean accuracy and brier class, however they differ slightly with the AUC. The Logistic model has the highest AUC followed by boosting, lasso, and finally random_forest.
+
+**4.6 Final evaluation on test set: LASSO**
+
+The LASSO Model was chosen as the final model as it had similar AUC to logistic and boosting and was the more parsimonious model choosing the more predictive covariates to use for the model.
+
+```{r}
+
+#final eval on test set:
+
+final_fit <- last_fit(lasso_final_wf, OR_split)
+
+collect_metrics(final_fit)
+
+collect_predictions(final_fit) |>
+  roc_curve(return_OR, .pred_Yes, event_level = "second") |>
+  autoplot()
+```
+
+The final evaluation of the LASSO model in the test set continued to show high accuracy and low brier class, again this should be interpreted with caution due to the low outcome rates. The AUC however has increased to 0.85 still showing good model discrimination.
+
+**4.7 Final LASSO model**
+
+```{r}
+final_model <- extract_fit_parsnip(final_fit)
+
+tidy(final_model) |>
+  arrange(desc(abs(estimate))) |> 
+  mutate(OR = exp(estimate))
+
+vip(final_model, lambda = lasso_1se$penalty)
+```
+
+Celebrex Missing, intracapsular tonsillectomy, Celebrex, and age at surgery were the top predictors for return to OR in this cohort. Celebrex_Missing and older age were associated with an increased predicted odds for return to OR, while Intracapsular T&A and Celebrex were associated with a lower predicted odds of return to OR. Additional variables retained in the model include: maximum tonsil size, asthma missing, sex missing, GERD, hispanic ethnicity, multirace/other race, complex medical comorbidity, hypervacsular intraoperative finding, missing race, missing gerd, sex, missing autism and missing developmental delay. Though these variables add to the overall model performance, they had lower importance compared to the top predictors.
+
+## **5. Sensitivity Analysis**
+
+**5.1 Sensitivity Analysis with Multiple Imputations for Celebrex**
+
+Given that Celebrex missing was the top predictor, we conducted multiple imputations to further elucidate if the predictive impact of Celebrex remained stable while accounting for the missing Celebrex data.
+
+```{r}
+#creating multiple imputations based on the model_OR cohort
+imp <- mice(
+  model_OR,
+  m = 20,
+  seed = 123
+)
+```
+
+```{r}
+
+#repeating the data splitting and recipe to prepare the predictors for the LASSO analysis
+
+mi_data <- complete(imp, 1)
+
+OR_split <- initial_split(
+  mi_data,
+  prop = 0.75,
+  strata = return_OR
+)
+
+OR_train <- training(OR_split)
+
+OR_folds <- vfold_cv(
+  OR_train,
+  v = 5,
+  strata = return_OR
+)
+
+# recipe
+OR_recipe <- recipe(
+  return_OR ~ .,
+  data = mi_data
+) |>
+  step_unknown(
+    all_nominal_predictors(),
+    new_level = "Missing"
+  ) |>
+  step_impute_median(
+    all_numeric_predictors()
+  ) |>
+  step_dummy(
+    all_nominal_predictors(),
+    one_hot = FALSE
+  ) |>
+  step_zv(
+    all_predictors()
+  ) |>
+  step_normalize(
+    all_numeric_predictors()
+  )
+
+#LASSO model on multiple imputations model, using only 1 imputation.
+lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) |>
+  set_engine("glmnet")
+
+lasso_wf <- workflow() |>
+  add_recipe(OR_recipe) |>
+  add_model(lasso_spec)
+
+lasso_grid <- tibble(penalty = 10^seq(-4, -0.5, length.out = 20))
+
+lasso_tune <- lasso_wf |>
+  tune_grid(OR_folds, grid = lasso_grid, metrics = metric_set(roc_auc))
+
+autoplot(lasso_tune)
+
+show_best(lasso_tune, metric = "roc_auc")
+select_best(lasso_tune, metric = "roc_auc")
+
+lasso_1se <- select_by_one_std_err(lasso_tune, desc(penalty), metric = "roc_auc")
+lasso_1se
+
+lasso_final_wf <- finalize_workflow(lasso_wf, lasso_1se)
+
+lasso_cv <- lasso_final_wf |>
+  fit_resamples(OR_folds, control = control_resamples(save_pred = TRUE))
+
+collect_metrics(lasso_cv)
+
+coef(
+  extract_fit_parsnip(
+    fit(finalize_workflow(lasso_wf, lasso_1se),
+        model_OR)
+  )$fit,
+  s = lasso_1se$penalty
+)
+
+
+```
+
+During cross validation there was a step decline in AUC if penalties were at the midpoint of .001 and .01, if penalties were \> .01 then the model performed no better than chance. Similar to the initial model the accuracy remained high (99%) and the brier class was low (0.013), however these should be interpreted cautiously due to low outcome event rates. The AUC was 0.74 indicating a modest model discrimination which decreased from the prior model. Compared to the prior model similar predictors remained including: missing developmental delay, missing GERD, GERD, missing autism, missing asthma, asthma, clebrex, missing celebrex, missing sex, intracapsular tonsillectomy, age at surgery, max tonsil size.
+
+**5.2 Final LASSO Model with Multiple Imputations**
+
+```{r}
+
+final_fit <- last_fit(lasso_final_wf, OR_split)
+
+collect_metrics(final_fit)
+
+collect_predictions(final_fit) |>
+  roc_curve(return_OR, .pred_Yes, event_level = "second") |>
+  autoplot()
+
+final_model <- extract_fit_parsnip(final_fit)
+
+tidy(final_model) |>
+  arrange(desc(abs(estimate))) |> 
+  mutate(OR = exp(estimate))
+
+vip(final_model, lambda = lasso_1se$penalty)
+```
+
+In this model after multiple imputations were performed for missing celebrex data, Celebrex, intracapsular tonsillectomy and age at surgery remain the top predictors. Black race, other/multirace, gerd, maximum tonsil size, hypervascularity finding, other/missing/refused ethnicity and complex medical comorbidity were also among the higher preforming predictors. All other predictors were shrunk to 0 and not incorporated into the predictive model.
+
+Celebrex and intracapsular tonsillectomy continued to decreased predicted odds of return to OR, while age at surgery was associated with an increased predicted odds of return to OR. In this model Black race was identified as decreasing the predicted odds of return to OR. Furthermore, other/multirace, GERD, max tonsil size, hypervascular interoperative finding slightly increased the predicted odds of return to OR.
+
+## **6. Conclusion**
+
+Our study identified that celebrex, tonsillectomy type and age at time of surgery were the most important predictive factors when predicting return to OR for management of post-tonsillectomy bleed. In addition to the inherit limitatations of retrospective data, the main limitation of this cohort was the amount of data missingness, a sensitivity analysis was performed using multiple imputations, but only one imputation was run for the purposes of this prelimary report. Based on these data, we will need to continue and fine tune the large language model used to extract the clinical data to better capture discharge medications. These analyses will be re-run on the final cohort to assess the stability of the top predictors. Furthermore, we will also evaluate importance of predictors when evaluating all children that come back to the hospital for bleeding regardless of OR requirement, this will remove the potential differing practice patterns among surgeons.
